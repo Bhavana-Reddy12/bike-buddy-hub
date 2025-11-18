@@ -341,7 +341,7 @@ const Index = () => {
               <Bike className="w-8 h-8 text-primary" />
               <span className="text-foreground">Bike </span>
               <RotatingText 
-                texts={["bikes", "rental", "anytime"]}
+                texts={["Rentals", "Anytime", "Buddy", "24/7", "Zone"]}
                 mainClassName="text-primary"
                 rotationInterval={2000}
               />
