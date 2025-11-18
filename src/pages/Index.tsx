@@ -10,6 +10,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import RotatingText from "@/components/RotatingText";
+import Bill, { BillProps } from "@/components/Bill";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type BikeStatus = "AVAILABLE" | "RENTED" | "IN_REPAIR";
 
@@ -48,6 +50,7 @@ const Index = () => {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [bikes, setBikes] = useState<BikeType[]>([]);
   const [rentals, setRentals] = useState<RentalType[]>([]);
+  const [completedRentals, setCompletedRentals] = useState<RentalType[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Form states
@@ -63,6 +66,9 @@ const Index = () => {
   
   const [statusChangeBikeId, setStatusChangeBikeId] = useState("");
   const [statusChangeNewStatus, setStatusChangeNewStatus] = useState<BikeStatus>("AVAILABLE");
+
+  const [showBill, setShowBill] = useState(false);
+  const [billDetails, setBillDetails] = useState<BillProps | null>(null);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,9 +101,15 @@ const Index = () => {
         .from("rentals")
         .select("*, customers(*), bikes(*)")
         .eq("is_returned", false);
+      const { data: completedRentalsData } = await supabase
+        .from("rentals")
+        .select("*, customers(*), bikes(*)")
+        .eq("is_returned", true)
+        .order("start_time", { ascending: false });
 
       setBikes(bikesData || []);
       setRentals(rentalsData || []);
+      setCompletedRentals(completedRentalsData || []);
     } catch (error) {
       toast.error("Failed to load data");
     } finally {
@@ -196,7 +208,7 @@ const Index = () => {
       // Get rental details
       const { data: rental } = await supabase
         .from("rentals")
-        .select("*, bikes(*)")
+        .select("*, bikes(*), customers(*)")
         .eq("id", parseInt(endRentalId))
         .single();
 
@@ -226,6 +238,15 @@ const Index = () => {
         .eq("bike_id", rental.bike_id);
 
       if (bikeError) throw bikeError;
+
+      setBillDetails({
+        customerName: rental.customers.name,
+        bikeModel: rental.bikes.model,
+        duration: duration,
+        cost: finalCost,
+        bikeId: rental.bike_id,
+      });
+      setShowBill(true);
 
       toast.success(`Rental ended! Final charge: ₹${finalCost.toFixed(2)}`);
       setEndRentalId("");
@@ -329,6 +350,14 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
+      <Dialog open={showBill} onOpenChange={setShowBill}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rental Bill</DialogTitle>
+          </DialogHeader>
+          {billDetails && <Bill {...billDetails} />}
+        </DialogContent>
+      </Dialog>
       {/* Header */}
       <motion.header
         initial={{ opacity: 0, y: -20 }}
@@ -341,7 +370,7 @@ const Index = () => {
               <Bike className="w-8 h-8 text-primary" />
               <span className="text-foreground">Bike </span>
               <RotatingText 
-                texts={["bikes", "rental", "anytime"]}
+                texts={["Rentals", "Anytime", "Buddy", "24/7", "Zone"]}
                 mainClassName="text-primary"
                 rotationInterval={2000}
               />
@@ -468,6 +497,48 @@ const Index = () => {
                       </CardContent>
                     </Card>
                   </div>
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Completed Trips</CardTitle>
+                      <CardDescription>Recently completed rentals</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {loading ? (
+                        <p className="text-muted-foreground">Loading...</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {completedRentals.length === 0 ? (
+                            <p className="text-muted-foreground">No completed trips yet</p>
+                          ) : (
+                            completedRentals.map((rental, index) => (
+                              <motion.div
+                                key={rental.id}
+                                initial={{ opacity: 0, x: -20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ delay: index * 0.1 }}
+                                className="p-4 border border-border rounded-lg bg-card hover:bg-accent/50 transition-colors"
+                              >
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <p className="font-semibold">Rental #{rental.id}</p>
+                                    <p className="text-sm text-muted-foreground">{rental.customers.name}</p>
+                                    <p className="text-sm text-muted-foreground">Bike: {rental.bike_id}</p>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                      {new Date(rental.start_time).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="font-semibold text-lg">₹{rental.final_cost?.toFixed(2)}</p>
+                                    <p className="text-sm text-muted-foreground">{rental.duration_hours} hours</p>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
                 </TabsContent>
 
                 {/* Rentals Tab */}
