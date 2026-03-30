@@ -1,6 +1,18 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { supabase } from "@/integrations/supabase/client";
+import {
+  addBike,
+  BikeStatus,
+  BikeType,
+  endRental,
+  getActiveRentals,
+  getBikes,
+  getCompletedRentals,
+  getRentalById,
+  RentalType,
+  startRental,
+  updateBikeStatus,
+} from "@/lib/localDb";
 import { Bike, Users, Activity, Plus, CheckCircle, AlertCircle, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,34 +24,6 @@ import { toast } from "sonner";
 import RotatingText from "@/components/RotatingText";
 import Bill, { BillProps } from "@/components/Bill";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-
-type BikeStatus = "AVAILABLE" | "RENTED" | "IN_REPAIR";
-
-interface BikeType {
-  bike_id: string;
-  model: string;
-  hourly_rate: number;
-  status: BikeStatus;
-  last_maintenance_date: string;
-  notes: string | null;
-}
-
-interface CustomerType {
-  id: number;
-  name: string;
-}
-
-interface RentalType {
-  id: number;
-  customer_id: number;
-  bike_id: string;
-  start_time: string;
-  is_returned: boolean;
-  duration_hours: number | null;
-  final_cost: number | null;
-  customers: CustomerType;
-  bikes: BikeType;
-}
 
 const Index = () => {
   // Login state
@@ -96,22 +80,17 @@ const Index = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data: bikesData } = await supabase.from("bikes").select("*");
-      const { data: rentalsData } = await supabase
-        .from("rentals")
-        .select("*, customers(*), bikes(*)")
-        .eq("is_returned", false);
-      const { data: completedRentalsData } = await supabase
-        .from("rentals")
-        .select("*, customers(*), bikes(*)")
-        .eq("is_returned", true)
-        .order("start_time", { ascending: false });
+      const [bikesData, rentalsData, completedRentalsData] = await Promise.all([
+        getBikes(),
+        getActiveRentals(),
+        getCompletedRentals(),
+      ]);
 
-      setBikes(bikesData || []);
-      setRentals(rentalsData || []);
-      setCompletedRentals(completedRentalsData || []);
-    } catch (error) {
-      toast.error("Failed to load data");
+      setBikes(bikesData);
+      setRentals(rentalsData);
+      setCompletedRentals(completedRentalsData);
+    } catch {
+      toast.error("Failed to load local data");
     } finally {
       setLoading(false);
     }
@@ -124,15 +103,13 @@ const Index = () => {
     }
 
     try {
-      const { error } = await supabase.from("bikes").insert({
+      await addBike({
         bike_id: newBikeId,
         model: newBikeModel,
         hourly_rate: parseFloat(newBikeRate),
         status: "AVAILABLE",
       });
 
-      if (error) throw error;
-      
       toast.success("Bike added successfully!");
       setNewBikeId("");
       setNewBikeModel("");
@@ -150,42 +127,7 @@ const Index = () => {
     }
 
     try {
-      // Find or create customer
-      let customerId: number;
-      const { data: existingCustomer } = await supabase
-        .from("customers")
-        .select("id")
-        .eq("name", rentalCustomerName)
-        .single();
-
-      if (existingCustomer) {
-        customerId = existingCustomer.id;
-      } else {
-        const { data: newCustomer, error: customerError } = await supabase
-          .from("customers")
-          .insert({ name: rentalCustomerName })
-          .select()
-          .single();
-
-        if (customerError || !newCustomer) throw customerError;
-        customerId = newCustomer.id;
-      }
-
-      // Create rental
-      const { error: rentalError } = await supabase.from("rentals").insert({
-        customer_id: customerId,
-        bike_id: rentalBikeId,
-      });
-
-      if (rentalError) throw rentalError;
-
-      // Update bike status
-      const { error: bikeError } = await supabase
-        .from("bikes")
-        .update({ status: "RENTED" })
-        .eq("bike_id", rentalBikeId);
-
-      if (bikeError) throw bikeError;
+      await startRental(rentalCustomerName, rentalBikeId);
 
       toast.success("Rental started successfully!");
       setRentalCustomerName("");
@@ -205,46 +147,22 @@ const Index = () => {
     const duration = parseInt(endRentalDuration);
 
     try {
-      // Get rental details
-      const { data: rental } = await supabase
-        .from("rentals")
-        .select("*, bikes(*), customers(*)")
-        .eq("id", parseInt(endRentalId))
-        .single();
+      const rental = await getRentalById(parseInt(endRentalId));
 
       if (!rental) {
         toast.error("Rental not found");
         return;
       }
 
-      const finalCost = rental.bikes.hourly_rate * duration;
-
-      // Update rental
-      const { error: rentalError } = await supabase
-        .from("rentals")
-        .update({
-          is_returned: true,
-          duration_hours: duration,
-          final_cost: finalCost,
-        })
-        .eq("id", parseInt(endRentalId));
-
-      if (rentalError) throw rentalError;
-
-      // Update bike status
-      const { error: bikeError } = await supabase
-        .from("bikes")
-        .update({ status: "AVAILABLE" })
-        .eq("bike_id", rental.bike_id);
-
-      if (bikeError) throw bikeError;
+      const updatedRental = await endRental(rental.id, duration);
+      const finalCost = updatedRental.final_cost || 0;
 
       setBillDetails({
-        customerName: rental.customers.name,
-        bikeModel: rental.bikes.model,
-        duration: duration,
+        customerName: updatedRental.customers.name,
+        bikeModel: updatedRental.bikes.model,
+        duration,
         cost: finalCost,
-        bikeId: rental.bike_id,
+        bikeId: updatedRental.bike_id,
       });
       setShowBill(true);
 
@@ -264,12 +182,7 @@ const Index = () => {
     }
 
     try {
-      const { error } = await supabase
-        .from("bikes")
-        .update({ status: statusChangeNewStatus })
-        .eq("bike_id", statusChangeBikeId);
-
-      if (error) throw error;
+      await updateBikeStatus(statusChangeBikeId, statusChangeNewStatus);
 
       toast.success("Bike status updated!");
       setStatusChangeBikeId("");
